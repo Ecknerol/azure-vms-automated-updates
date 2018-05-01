@@ -1,0 +1,108 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "virtualMachinePrefix": {
+            "type": "string",
+            "metadata": {
+                "description": "Prefix used for VM name. It will be followed by an index number."
+            }
+        },
+        "omsWorkspaceAutomationAccount": {
+            "type": "string",
+            "metadata": {
+                "description": "The name of the automation Account linked to the OMS workspace"
+            }
+        },
+        "scheduledUpdateStartDate": {
+            "type": "string",
+            "metadata": {
+                "description": "StartDate for the patching schedule, we have to set this as a parameter because the template needs a date in the future"
+            }
+        },
+        "scheduledUpdateMaintenanceWindow": {
+            "type": "int",
+            "metadata": {
+                "description": "maintenance window value in hours, used to stagger the schedules so 2 vms are not updated at the same time"
+            }
+        },
+        "timeStamp": {
+            "type": "string",
+            "metadata": {
+                "description": "unix style timestamp, used to generate a unique GUID at each run"
+            }
+        },
+        "scheduledUpdateWorkerGroups": {
+            "type": "string",
+            "metadata": {
+                "description": "csv string of HybridRunbookWorkerGroup names"
+            }
+        },
+        "scheduledUpdateJobSuffix": {
+            "type": "string",
+            "metadata": {
+                "description": "suffix appended to the schedule names to identfy a particular type of job"
+            }
+        }
+    },
+    "variables": {
+        "workerGroupArray": "[split(parameters('scheduledUpdateWorkerGroups'),',')]"
+    },
+    "resources": [
+        {
+            "apiVersion": "2015-10-31",
+            "type": "Microsoft.Automation/automationAccounts/Schedules",
+            "name": "[concat(parameters('omsWorkspaceAutomationAccount'),'/',parameters('virtualMachinePrefix'),'-Weekly-',parameters('scheduledUpdateJobSuffix'),'-0',string(add(mul(copyIndex(),parameters('scheduledUpdateMaintenanceWindow')),1)),'-AM')]",
+            "properties": {
+                "description": null,
+                "startTime": "[concat(parameters('scheduledUpdateStartDate'),'T0',string(add(mul(copyIndex(),parameters('scheduledUpdateMaintenanceWindow')),1)),':00:00+00:00')]",
+                "startTimeOffsetMinutes": 0,
+                "isEnabled": true,
+                "interval": 1,
+                "frequency": "Week",
+                "timeZone": "UTC",
+                "advancedSchedule": {
+                    "monthDays": null,
+                    "monthlyOccurrences": null,
+                    "weekDays": [
+                        "Sunday"
+                    ]
+                }
+            },
+            "copy": {
+                "name": "scheduleLoop",
+                "count": "[length(variables('workerGroupArray'))]"
+
+            }
+        },
+        {
+            "apiVersion": "2015-10-31",
+            "type": "Microsoft.Automation/AutomationAccounts/JobSchedules",
+            "name": "[concat(parameters('omsWorkspaceAutomationAccount'),'/',guid(resourceGroup().name,string(copyIndex('jobLoop')),parameters('timestamp')))]",
+            "dependsOn": [
+                "[concat(parameters('virtualMachinePrefix'),'-Weekly-',parameters('scheduledUpdateJobSuffix'),'-0',string(add(mul(copyIndex('jobLoop'),parameters('scheduledUpdateMaintenanceWindow')),1)),'-AM')]"
+            ],
+            "properties": {
+                "runbook": {
+                    "name": "Patch-MicrosoftOMSComputers"
+                },
+                "schedule": {
+                    "name": "[concat(parameters('virtualMachinePrefix'),'-Weekly-',parameters('scheduledUpdateJobSuffix'),'-0',string(add(mul(copyIndex('jobLoop'),parameters('scheduledUpdateMaintenanceWindow')),1)),'-AM')]"
+                },
+                "runOn": null,
+                "parameters": {
+                    "Duration": "[concat('0',string(parameters('scheduledUpdateMaintenanceWindow')),':00:00')]",
+                    "ScheduleName": "[concat(parameters('virtualMachinePrefix'),'-Weekly-',parameters('scheduledUpdateJobSuffix'),'-0',string(add(mul(copyIndex('jobLoop'),parameters('scheduledUpdateMaintenanceWindow')),1)),'-AM')]",
+                    "WorkspaceId": "[parameters('omsWorkspaceAutomationAccount')]",
+                    "SoftwareUpdateConfigurationSettings": "\"{\\\"OperatingSystem\\\":1,\\\"WindowsConfiguration\\\":{\\\"UpdateCategories\\\":255,\\\"ExcludedKBNumbers\\\":null},\\\"LinuxConfiguration\\\":null,\\\"NonAzureComputerNames\\\":null,\\\"AzureVirtualMachines\\\":null,\\\"Duration\\\":null}\"",
+                    "ComputerIdList": "[concat(string(variables('workerGroupArray')[copyIndex('jobLoop')]),'=Windows')]"
+                }
+            },
+            "copy": {
+                "name": "jobLoop",
+                "count": "[length(variables('workerGroupArray'))]"
+
+            }
+        }
+    ]
+}

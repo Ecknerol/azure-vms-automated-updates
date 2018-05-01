@@ -1,0 +1,331 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "adminUsername": {
+            "type": "string",
+            "metadata": {
+                "description": "Username for the Virtual Machine."
+            }
+        },
+        "adminPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "Password for the Virtual Machine."
+            }
+        },
+        "vmLocation": {
+            "type": "string",
+            "metadata": {
+                "description": "an azure region that supports VMs of the tier we want"
+            },
+            "defaultValue": "eastus2"
+        },
+        "dnsLabelPrefix": {
+            "type": "string",
+            "metadata": {
+                "description": "Unique DNS Name for the Public IP used to access the Virtual Machine."
+            }
+        },
+        "virtualMachinePrefix": {
+            "type": "string",
+            "metadata": {
+                "description": "Prefix used for VM name. It will be followed by an index number."
+            }
+        },
+        "numberOfInstances": {
+            "type": "int",
+            "metadata": {
+                "description": "number of vms created"
+            }
+        },
+        "omsLocation": {
+            "type": "string",
+            "metadata": {
+                "description": "an azure region that supports OMS workspaces"
+            },
+            "defaultValue": "uksouth"
+        },
+        "omsWorkspace": {
+            "type": "string",
+            "metadata": {
+                "description": "The name of the OMS workspace"
+            }
+        },
+        "omsWorkspaceAutomationAccount": {
+            "type": "string",
+            "metadata": {
+                "description": "The name of the automation Account linked to the OMS workspace"
+            }
+        },
+        "automationAccountSku": {
+            "type": "string",
+            "defaultValue": "Basic"
+        }
+    },
+    "variables": {
+        "storageAccountName": "[concat('diags', uniquestring(resourceGroup().id))]",
+        "nicName": "myVMNic",
+        "addressPrefix": "10.0.0.0/16",
+        "subnetName": "Subnet",
+        "subnetPrefix": "10.0.0.0/24",
+        "publicIPAddressName": "myPublicIP",
+        "virtualNetworkName": "MyVNET",
+        "networkSecurityGroupName": "nsgAllowRemoting",
+        "subnetRef": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('virtualNetworkName'), variables('subnetName'))]",
+        "OMSUpdates": {
+            "Name": "[concat('Updates', '(', parameters('omsWorkspace'), ')')]",
+            "GalleryName": "Updates"
+        }
+    },
+    "resources": [
+        {
+            "apiVersion": "2015-11-01-preview",
+            "type": "Microsoft.Automation/automationAccounts",
+            "name": "[parameters('omsWorkspaceAutomationAccount')]",
+            "apiVersion": "2015-10-31",
+            "location": "[parameters('omslocation')]",
+            "properties": {
+                "sku": {
+                    "name": "[parameters('automationAccountSku')]"
+                }
+            },
+            "dependsOn": []
+        },
+        {
+            "apiVersion": "2015-11-01-preview",
+            "type": "Microsoft.OperationalInsights/workspaces",
+            "name": "[parameters('omsWorkspace')]",
+            "location": "[parameters('omslocation')]",
+            "properties": {
+                "sku": {
+                    "Name": "pergb2018"
+                },
+                "retention": "30"
+            },
+            "resources": [
+                {
+                    "apiVersion": "2015-11-01-preview",
+                    "name": "[concat(parameters('omsWorkspace'),'/Automation')]",
+                    "type": "Microsoft.OperationalInsights/workspaces/linkedServices",
+                    "dependsOn": [
+                        "[concat('Microsoft.OperationalInsights/workspaces/', parameters('omsWorkspace'))]",
+                        "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Automation/automationAccounts/',parameters('omsWorkspaceAutomationAccount'))]"
+                    ],
+                    "properties": {
+                      "resourceId": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Automation/automationAccounts/',parameters('omsWorkspaceAutomationAccount'))]"
+                    }
+                },
+                {
+                    "apiVersion": "2015-11-01-preview",
+                    "location": "[parameters('omslocation')]",
+                    "name": "[variables('OMSUpdates').Name]",
+                    "type": "Microsoft.OperationsManagement/solutions",
+                    "id": "[resourceId('Microsoft.OperationsManagement/solutions/', variables('OMSUpdates').Name)]",
+                    "dependsOn": [
+                        "[concat('Microsoft.OperationalInsights/workspaces/', parameters('omsWorkspace'))]"
+                    ],
+                    "properties": {
+                        "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces/', parameters('omsWorkspace'))]"
+                    },
+                    "plan": {
+                        "name": "[variables('OMSUpdates').Name]",
+                        "publisher": "Microsoft",
+                        "product": "[Concat('OMSGallery/', variables('OMSUpdates').GalleryName)]",
+                        "promotionCode": ""
+                    }
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('storageAccountName')]",
+            "apiVersion": "2017-06-01",
+            "location": "[parameters('vmlocation')]",
+            "sku": {
+                "name": "Standard_LRS"
+            },
+            "kind": "Storage",
+            "properties": {}
+        },
+        {
+            "apiVersion": "2017-08-01",
+            "type": "Microsoft.Network/publicIPAddresses",
+            "name": "[concat(variables('publicIPAddressName'),'-',string(copyIndex('publicIpCopyLoop')))]",
+            "location": "[parameters('vmlocation')]",
+            "sku": {
+                "name": "Standard"
+            },
+            "copy": {
+                "name": "publicIpCopyLoop",
+                "count": "[parameters('numberOfInstances')]"
+            },
+            "properties": {
+                "publicIPAllocationMethod": "Static",
+                "dnsSettings": {
+                    "domainNameLabel": "[concat(parameters('dnsLabelPrefix'),string(copyIndex('publicIpCopyLoop')))]"
+                }
+            }
+        },
+        {
+            "apiVersion": "2016-03-30",
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "name": "[variables('networkSecurityGroupName')]",
+            "location": "[parameters('vmlocation')]",
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "RemoteConnection",
+                        "properties": {
+                            "description": "Allow RDP",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "3389",
+                            "sourceAddressPrefix": "*",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 100,
+                            "direction": "Inbound"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "apiVersion": "2017-08-01",
+            "type": "Microsoft.Network/virtualNetworks",
+            "name": "[variables('virtualNetworkName')]",
+            "location": "[parameters('vmlocation')]",
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "[variables('addressPrefix')]"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": "[variables('subnetName')]",
+                        "properties": {
+                            "addressPrefix": "[variables('subnetPrefix')]"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "apiVersion": "2017-08-01",
+            "type": "Microsoft.Network/networkInterfaces",
+            "name": "[concat(variables('nicName'),'-',string(copyIndex('nicCopyLoop')))]",
+            "location": "[parameters('vmlocation')]",
+            "dependsOn": [
+                "[concat(variables('publicIPAddressName'),'-',string(copyIndex('nicCopyLoop')))]",
+                "[variables('virtualNetworkName')]",
+                "[variables('networkSecurityGroupName')]"
+            ],
+            "copy": {
+                "name": "nicCopyLoop",
+                "count": "[parameters('numberOfInstances')]"
+            },
+            "properties": {
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('networkSecurityGroupName'))]"
+                },
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('publicIPAddressName'),'-',string(copyIndex('nicCopyLoop'))))]"
+                            },
+                            "subnet": {
+                                "id": "[variables('subnetRef')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "apiVersion": "2017-03-30",
+            "type": "Microsoft.Compute/virtualMachines",
+            "name": "[concat(parameters('virtualMachinePrefix'),'-',string(copyIndex('vmCopyLoop')))]",
+            "location": "[parameters('vmlocation')]",
+            "dependsOn": [
+                "[variables('storageAccountName')]",
+                "[concat(variables('nicName'),'-',string(copyIndex('vmCopyLoop')))]",
+            ],
+            "copy": {
+                "name": "vmCopyLoop",
+                "count": "[parameters('numberOfInstances')]"
+            },
+            "resources": [
+                {
+                    "type": "extensions",
+                    "name": "OMSExtension",
+                    "apiVersion": "2015-06-15",
+                    "location": "[parameters('vmlocation')]",
+                    "dependsOn": [
+                        "[concat(parameters('virtualMachinePrefix'),'-',string(copyIndex('vmCopyLoop')))]",
+                        "[parameters('omsWorkspace')]"
+
+                    ],
+                    "properties": {
+                        "publisher": "Microsoft.EnterpriseCloud.Monitoring",
+                        "type": "MicrosoftMonitoringAgent",
+                        "typeHandlerVersion": "1.0",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "workspaceId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', parameters('omsWorkspace')), '2015-11-01-preview').customerId]"
+                        },
+                        "protectedSettings": {
+                            "workspaceKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', parameters('omsWorkspace')), '2015-11-01-preview').primarySharedKey]"
+                        }
+                    }
+                }
+
+            ],
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "Standard_A1"
+                },
+                "osProfile": {
+                    "computerName": "[parameters('virtualMachinePrefix')]",
+                    "adminUsername": "[parameters('adminUsername')]",
+                    "adminPassword": "[parameters('adminPassword')]"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "MicrosoftWindowsServer",
+                        "offer": "WindowsServer",
+                        "sku": "2016-Datacenter",
+                        "version": "latest"
+                    },
+                    "osDisk": {
+                        "createOption": "FromImage"
+                    },
+                    "dataDisks": [
+                        {
+                            "diskSizeGB": 1023,
+                            "lun": 0,
+                            "createOption": "Empty"
+                        }
+                    ]
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('nicName'),'-',string(copyIndex('vmCopyLoop'))))]"
+                        }
+                    ]
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": "true",
+                        "storageUri": "[reference(resourceId('Microsoft.Storage/storageAccounts/', variables('storageAccountName'))).primaryEndpoints.blob]"
+                    }
+                }
+            }
+        }
+    ]
+}
