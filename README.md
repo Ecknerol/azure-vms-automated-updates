@@ -1,35 +1,57 @@
 # azure-vms-automated-updates
 
-This sample code set up automated patching on Azure VMS.
-while there is a few resources online explaining how to do this via arm template deployment.
+This sample code set up automated patching on Azure VMS. While there is a few resources online explaining how to do this on the UI, we want to manage those via arm template deployment.
 
-Phase 1 (arm-vms/wms.arm.json)
+## Phase 1 : Deploy a set of VMs with Update Management enabled via arm
 
 This template set up the pre requisite resources :
   - creates an AutomationAccount.
   - creates a LogAnalytics workspace with the OMS Updates solution installed and linked to the automation account.
   - creates a set of Widows VMS, each with the MicrosoftMonitoringAgent linked to the log analytics workspace.
 
-Once the deployment is finished, each VM is now an Hybrid Runbook Worker on the automation account.
-The status of windows update rollout for those VMs is now visible on the Azure portal (under AutomationAccount/UpdateManagement) or 
-on the OMS portal (under System Update Assessment)
+  ```powershell
+  > Login-AzureRmAccount
+  > New-AzureRmResourceGroup -Name "eck-sample-rg" -Location "uksouth"
+  > New-AzureRmResourceGroupDeployment -ResourceGroupName "eck-sample-rg" -TemplateFile .\phase-1\vms.arm.json -TemplateParameterFile .\phase-1\vms.params.local.arm.json
+  ```
 
-If we want to schedule windows update execution on the VMs, we can do it from both UIs (AutomationAccount and OMS Portal), but 
-this doesn't scale. If we redeploy with a greater or smaller number of VMs we have to go back to the UI and modify the schedules 
-accordingly.
+## Phase 2 : Use Powershell to generates the parameters we need
 
-Implementing the schedules via arm template presents a few challenges :
-  - The schedules need to not overlap to ensure availability of whichever service our VMs host. 
-  - We don't want all nodes of a same service applying updates (and potentially restarting) at the same time.
-  - The schedules need a start date and time that has to be in the future.
-  - The Hybrid Runbook Workers are created in  the background durig the deployment and we can't know their IDs from the deployment output.
-  - You cannot overwrite the job schedules that are created, they have to be unregistered and the recreated for every deployment
-  - A resource of the type jobSchedule has to have a GUID for a name and these have to be unique (can't overwrite)
+Before we can deploy our scheduled update jobs via arm template we need 3 steps that need to be performed outside of a deployment :
+- Generate a timestamp that will be unique to each deployment.
+```powershell
+> $timeStamp = .\phase-2\Get-UnixTimestamp.ps1
+> $timeStamp
+1525256370
+```
+- Generate a date in the future that will be the start date of our schedules (i.e next Sunday).
+```powershell
+> $startDate = .\phase-2\Get-NextWeekday.ps1 -dayOfWeek "Sunday"
+> $startDate
+2018-05-06
+```
+- List the existing Hybrid Runbook Worker Groups that match our VMs and remove the scheduledRunbooks on our schedules that match the runbook (in our case Patch-MicrosoftOMSComputers) if they've been deployed already.
+```powershell
+> $workerGroups = .\phase-2\Get-HybridRunbookworkerGroup.ps1 -resourceGroupName "eck-sample-rg" -automationAccount "eck-sample-aa" -instanceNumber 2 -vmPrefix "eck-sample-vm" -runbookName "Patch-MicrosoftOMSComputers" -clean
+unregistered : 4579a459-660b-5419-8a6e-afa6f4012e95
+unregistered : 086eac53-835c-56e8-a73c-fd00bd220334
+> $workerGroups
+eck-sample-vm_124f24b9-eb34-4384-b9ac-f72e9b3b24cf,eck-sample-vm_41d97d74-b214-48f8-8440-34ad55d8c5b6
+```
 
-Before we can deploy our scheduled update job via arm template, we need 3 values that have to be generated outside of a deployment and we need to make sure 
-the already existing upate jobs will not interfere with the deployment (they need to be unregistered).
+## Phase 3 : Deploy Schedules and scheduledRunbook via arm
 
-Phase 2 (Powershell)
+This template deploys 2 resources for each VMs :
+ - a schedule that starts after the previous job has finished, for more than 1 VM the schedules will start on the specified day at 01:00, 03:00, 05:0- ... The schedules are set to repeat every week.
+ - a scheduledRunbook of Patch-MicrosoftOMSComputers associated with 1 schedule with a specified duration so it doesn't overlap when the next schedule starts.
+
+  ```powershell
+  > New-AzureRmResourceGroupDeployment -ResourceGroupName "eck-sample-rg" -TemplateFile .\phase-3\scheduled.updates.arm.json -TemplateParameterFile .\phase-3\scheduled.updates.params.local.arm.json -timeStamp $timeStamp -scheduledUpdateStartDate $startDate -scheduledUpdateWorkerGroups $workerGroups
+  ```
+
+
+
+
 
 
 

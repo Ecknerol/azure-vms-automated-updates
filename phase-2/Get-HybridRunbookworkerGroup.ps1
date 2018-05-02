@@ -47,5 +47,5 @@ foreach ($scheduleJobId in $scheduleJobIds) {
     }
 }
 
-# return the names of the workerGroup as an array
-$groupNames
+# return the names of the workerGroup as a csv string
+$([system.String]::join(",",$groupNames))
